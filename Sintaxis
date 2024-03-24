@@ -1,0 +1,861 @@
+library(gt)
+library(gtsummary)
+library(rio)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(ggsci)
+
+### Bajar la base de datos "pop.xlsx" e importarla a R.
+#### Preparación de la base de datos de los denominadores poblacionales ####
+pop <- pop %>% 
+  mutate(grupo_etario=ifelse(grupo_edad=="85-89"|grupo_edad=="90-94" | grupo_edad=="95-99" | grupo_edad=="100 y más","85 y más",
+                             ifelse(grupo_edad=="0-4" | grupo_edad=="5-9", "0-9",
+                                    ifelse(grupo_edad=="10-14" | grupo_edad=="15-19", "10-19",
+                                           ifelse(grupo_edad=="20-24" | grupo_edad=="25-29", "20-29",
+                                                  ifelse(grupo_edad=="30-34" | grupo_edad=="35-39","30-39",
+                                                         ifelse(grupo_edad=="40-44" | grupo_edad=="45-49","40-49", grupo_edad))))))) %>% 
+  group_by(anio,jurisdiccion, sexo, grupo_etario) %>% 
+  summarise(pob=sum(pop)) %>% 
+  ungroup()
+### Grupos de cada 5 años ####
+pop <- pop %>% 
+  mutate(grupo_etario=ifelse(grupo_edad=="85-89"|grupo_edad=="90-94" | grupo_edad=="95-99" | grupo_edad=="100 y más","85 y más",grupo_edad)) %>% 
+  group_by(anio,jurisdiccion, sexo, grupo_etario) %>% 
+  summarise(pob=sum(pop)) %>% 
+  ungroup()
+
+# Interpolación de la población a meses ####
+library(dplyr)
+
+expand_data <- function(x) {
+  anios <- min(x$anio):max(x$anio)
+  meses <- 1:12
+  grid <- expand.grid(mes=meses, anio=anios)
+  x$mes <- 1
+  merged <- grid %>% left_join(x, by=c('anio', 'mes'))
+  merged$grupo_etario <- x$grupo_etario[1]
+  merged$jurisdiccion <- x$jurisdiccion[1]
+  merged$sexo <- x$sexo[1]
+  return(merged)
+}
+
+interpolate_data <- function(data) {
+  xout <- 1:nrow(data)
+  y <- data$pob
+  interpolation <- approx(x=xout[!is.na(y)], y=y[!is.na(y)], xout=xout)
+  data$yhat <- interpolation$y
+  return(data)
+}
+
+expand_and_interpolate <- function(x) interpolate_data(expand_data(x))
+
+mensual <- pop %>% group_by(jurisdiccion, sexo, grupo_etario) %>% do(expand_and_interpolate(.))
+
+
+pop_mensual <- as.data.frame(mensual)
+
+pop <- pop_mensual %>% 
+  select(-pob) %>% 
+  rename(pob=yhat) %>% 
+  mutate(mes_anio=paste0(ifelse(mes<10,paste0("0",mes),mes),"-", anio))
+rm(pop_mensual, mensual)
+
+## Agregado de los días laborables por mes ####
+
+pop <- pop %>% 
+  left_join(laboral, by="mes_anio") %>% 
+  filter(anio.x<2023) %>% 
+  select(-anio.y, -mes.y) %>% 
+  rename(mes=mes.x, anio=anio.x) %>% 
+  mutate(jurisdiccion=ifelse(jurisdiccion=="caba","CABA", jurisdiccion))
+
+base_mort <- base_mort %>% 
+  rename(grupo_edad=grupo_etario) %>% 
+  mutate(grupo_etario=ifelse(grupo_edad=="01.0 a 6 días"| grupo_edad=="02.7 a 27 días" | grupo_edad=="03.28 días a 11 meses" | grupo_edad=="04.1 año" | grupo_edad=="05.2 años" | grupo_edad=="06.3 años" | grupo_edad=="07.4 años", "0-4",
+                             ifelse(grupo_edad=="08.5 a 9", "5-9",
+                             ifelse(grupo_edad=="09.10 a 14", "10-14",
+                                    ifelse(grupo_edad=="10.15 a 19", "15-19",
+                                                  ifelse(grupo_edad=="11.20 a 24", "20-24",
+                                                         ifelse(grupo_edad=="12.25 a 29", "25-29",
+                                                                ifelse(grupo_edad=="13.30 a 34", "30-34",
+                                                                       ifelse(grupo_edad=="14.35 a 39", "35-39",
+                                                                              ifelse(grupo_edad=="15.40 a 44", "40-44",
+                                                                                     ifelse(grupo_edad=="16.45 a 49", "45-49",
+                                                                                            ifelse(grupo_edad=="17.50 a 54", "50-54",
+                                                                                                   ifelse(grupo_edad=="18.55 a 59", "55-59",
+                                                                                                          ifelse(grupo_edad=="19.60 a 64", "60-64",
+                                                                                                                 ifelse(grupo_edad=="20.65 a 69", "65-69",
+                                                                                                                        ifelse(grupo_edad=="21.70 a 74", "70-74",
+                                                                                                                               ifelse(grupo_edad=="22.75 a 79", "75-79", 
+                                                                                                                                      ifelse(grupo_edad=="23.80 a 84", "80-84",
+                                                                                                                                             ifelse(grupo_edad=="24.85 y más", "85 y más", NA)))))))))))))))))),
+         sexo_nombre=ifelse(sexo==1, "Varón", 
+                            ifelse(sexo==2, "Mujer",NA)),
+         jurisdiccion=ifelse(prov==2, "CABA", 
+                             ifelse(prov==6, "Buenos Aires", 
+                                    ifelse(prov==10, "Catamarca",
+                                           ifelse(prov==14, "Córdoba",
+                                                  ifelse(prov==18, "Corrientes",
+                                                         ifelse(prov==22, "Chaco",
+                                                                ifelse(prov==26,"Chubut",
+                                                                       ifelse(prov==30,"Entre Ríos",
+                                                                              ifelse(prov==34, "Formosa",
+                                                                                     ifelse(prov==38, "Jujuy",
+                                                                                            ifelse(prov==42, "La Pampa",
+                                                                                                   ifelse(prov==46, "La Rioja",
+                                                                                                          ifelse(prov==50, "Mendoza",
+                                                                                                                 ifelse(prov==54, "Misiones",
+                                                                                                                        ifelse(prov==58, "Neuquén",
+                                                                                                                               ifelse(prov==62, "Río Negro",
+                                                                                                                                      ifelse(prov==66, "Salta",
+                                                                                                                                             ifelse(prov==70, "San Juan",
+                                                                                                                                                    ifelse(prov==74, "San Luis",
+                                                                                                                                                           ifelse(prov==78, "Santa Cruz",
+                                                                                                                                                                  ifelse(prov==82, "Santa Fe",
+                                                                                                                                                                         ifelse(prov==86, "Santiago del Estero",
+                                                                                                                                                                                ifelse(prov==90, "Tucumán",
+                                                                                                                                                                                       ifelse(prov==94,"Tierra del Fuego",NA))))))))))))))))))))))))) %>% 
+  separate(mes_anio, into = c("mes","anio"),sep="/",remove = FALSE) %>% 
+  filter(mes!="00" & as.numeric(anio)>2014 & sexo<3 & prov<98 & !is.na(grupo_etario)) %>% 
+  mutate(mes_anio=paste0(mes,"-", anio))
+
+arg <- base_mort %>% 
+  group_by(mes_anio, grupo_etario, sexo_nombre) %>% 
+  summarise(cantidad=sum(cantidad)) %>% 
+  ungroup() %>% 
+  mutate(jurisdiccion="Argentina")
+    
+
+    
+base_mort <- base_mort %>% 
+  select(mes_anio, jurisdiccion, sexo_nombre, grupo_etario, cantidad) %>% 
+  bind_rows(arg) %>% 
+  group_by(mes_anio, jurisdiccion, sexo_nombre, grupo_etario) %>% 
+  summarise(muertes=sum(cantidad)) %>% 
+  ungroup() %>% 
+  rename(sexo=sexo_nombre)
+
+rm(arg)
+
+## Unión pop y mortalidad ####
+db <- pop %>% 
+  mutate(sexo=ifelse(sexo=="femenino", "Mujer","Varón")) %>% 
+  left_join(base_mort, by=c("mes_anio","jurisdiccion","grupo_etario","sexo")) %>% 
+  mutate(muertes=ifelse(is.na(muertes),0,muertes))
+db <- db %>% 
+  mutate(edad_grupo=ifelse(grupo_etario=="0-4" | grupo_etario=="5-9" | grupo_etario=="10-14"| grupo_etario=="15-19" | grupo_etario=="20-24" | grupo_etario=="25-29", "0-29",
+                           ifelse(grupo_etario=="30-34" |grupo_etario=="35-39" | grupo_etario=="40-44" | grupo_etario=="45-49" | grupo_etario=="50-54" | grupo_etario=="55-59", "30-59",
+                                  ifelse(grupo_etario=="60-64", "60-64",
+                                         ifelse(grupo_etario=="65-69", "65-69",
+                                                ifelse(grupo_etario=="70-74","70-74",
+                                                       ifelse(grupo_etario=="75-79","75-79",
+                                                              ifelse(grupo_etario=="80-84","80-84","85 o más"))))))),
+         edad_grupo=as.factor(edad_grupo), edad_grupo=factor(edad_grupo, levels=c("0-29", "30-59","60-64","65-69","70-74","75-79","80-84","85 o más")),
+         mes=as.factor(mes),mes=factor(mes, levels=levels(mes)),grupo_etario=as.factor(grupo_etario), grupo_etario=factor(grupo_etario, levels=levels(grupo_etario)[c(1,10,2:9, 11:18)]),
+         jurisdiccion=as.factor(jurisdiccion), jurisdiccion=factor(jurisdiccion, levels=levels(jurisdiccion)), 
+         sexo=as.factor(sexo), sexo=factor(sexo, levels=levels(sexo)),
+         mes_numero=ifelse(mes %in% 1:9, paste0(anio,"0", mes),paste0(anio,mes)), mes_numero=as.numeric(mes_numero))
+
+## Base de datos para los análisis ####
+db1 <- db %>% 
+  select(anio, mes, workdays, grupo_etario, edad_grupo, sexo, jurisdiccion, muertes, pob,mes_numero, tendencia)
+
+names(db1) <- c("anio", "mes","dias_trab", "grup_edad", "grup_edad_amp", "sexo", "jurisdiccion","muertes","poblacion", "periodo", "tendencia")
+
+
+db1 <- db1 %>% 
+  mutate(anio=as.numeric(anio),
+         dias_trab=as.numeric(dias_trab),
+         poblacion=as.numeric(poblacion),
+         periodo=ifelse(mes %in% 1:9,paste0(anio, "0",mes),paste0(anio, mes)),
+         periodo=as.numeric(periodo),
+         mes=as.factor(mes),
+         grup_edad=as.factor(grup_edad),
+         grup_edad=factor(grup_edad, levels=levels(grup_edad)[c(1,5:10,2:4,11:18)]),
+         grup_edad_amp=as.factor(grup_edad_amp), grup_edad_amp=factor(grup_edad_amp, levels=levels(grup_edad_amp)),
+         sexo=as.factor(sexo), sexo=factor(sexo, levels=levels(sexo)[c(1,2)]),
+         jurisdiccion=as.factor(jurisdiccion), jurisdiccion=factor(jurisdiccion, levels=levels(jurisdiccion[c(2:25,1)])),
+         prov=ifelse(jurisdiccion=="Argentina",0,1))
+
+
+
+db1 <- db1[order(db1$grup_edad, db1$sexo, db1$jurisdiccion, db1$periodo), ]
+rownames(db1) <- NULL
+
+db1 <- db1 %>% 
+  mutate(tendencia=ave(db1$periodo, db1$grup_edad, db1$sexo, db1$jurisdiccion, FUN=seq_along))
+
+### Ajuste de muertes esperadas por mes
+modelo.mensual <- function(db1) {
+  
+  ### Seleccionar los 5 años previos al período del análisis
+  final <- unique(db1$tendencia[db1$periodo==ref_periodo]) - 12
+  comienzo <- unique(db1$tendencia[db1$periodo==ref_periodo]) - 12*6 + 1
+  db_ajuste <- db1[db1$tendencia %in% comienzo:final,]
+  rownames(db_ajuste) <- NULL
+  
+  ### Eliminar los períodos de máxima afectacción por COVID para predecir las muertes
+  periodos_covid <- c(202008, 202009, 202010, 202104, 202105, 202106, 202107, 202108)
+  db_ajuste <- db_ajuste[!(db_ajuste$periodo %in% periodos_covid),]
+  rownames(db_ajuste) <- NULL
+  
+  ### Ajuste modelo Argentina
+  if(sum(db_ajuste$prov)==0) {
+    db_mod <- glm(muertes ~ grup_edad + sexo + tendencia + mes + dias_trab +
+                    grup_edad_amp:sexo + grup_edad_amp:tendencia + grup_edad_amp:mes +
+                    offset(log(poblacion)),
+                  family=quasipoisson,
+                  data=db_ajuste)
+  }
+  
+  ### Ajuste modelo provincias
+  if(sum(db_ajuste$prov)>0) {
+    db_mod <- glm(muertes ~ grup_edad + sexo + tendencia + mes + dias_trab + jurisdiccion +
+                    grup_edad_amp:sexo + grup_edad_amp:tendencia + grup_edad_amp:mes +
+                    offset(log(poblacion)),
+                  family=quasipoisson,
+                  data=db_ajuste)
+  }
+  
+  ### Restringe la predicción al mes de referencia
+  predichos <- db1[db1$periodo==ref_periodo,]
+  rownames(predichos) <- NULL
+  
+  ### Utilizar el modelo para predecir las muertes
+  db_predichos <- as.data.frame(predict(db_mod, newdata=predichos,
+                                    type="response", se.fit=TRUE))[1:2]
+  rownames(db_predichos) <- NULL
+  colnames(db_predichos) <- c("d_hat", "se_d_hat")
+  
+  ### Guardar las predicciones en una lista
+  salida_pred <- cbind(predichos, db_predichos)
+  
+}
+
+
+### 01_2020 ####
+ref_periodo <- 202001
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_01_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 02_2020 ####
+ref_periodo <- 202002
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_02_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 03_2020 ####
+ref_periodo <- 202003
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_03_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 04_2020 ####
+ref_periodo <- 202004
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_04_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 05_2020 ####
+ref_periodo <- 202005
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_05_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 06_2020 ####
+ref_periodo <- 202006
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_06_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 07_2020 ####
+ref_periodo <- 202007
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_07_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 08_2020 ####
+ref_periodo <- 202008
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_08_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 09_2020 ####
+ref_periodo <- 202009
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_09_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 10_2020 ####
+ref_periodo <- 202010
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_10_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 11_2020 ####
+ref_periodo <- 202011
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_11_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 12_2020 ####
+ref_periodo <- 202012
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_12_2020 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+
+
+### 01_2021 ####
+ref_periodo <- 202101
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_01_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 02_2021 ####
+ref_periodo <- 202102
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_02_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 03_2021 ####
+ref_periodo <- 202103
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_03_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 04_2021 ####
+ref_periodo <- 202104
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_04_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 05_2021 ####
+ref_periodo <- 202105
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_05_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 06_2021 ####
+ref_periodo <- 202106
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_06_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 07_2021 ####
+ref_periodo <- 202107
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_07_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 08_2021 ####
+ref_periodo <- 202108
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_08_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 09_2021 ####
+ref_periodo <- 202109
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_09_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 10_2021 ####
+ref_periodo <- 202110
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_10_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 11_2021 ####
+ref_periodo <- 202111
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_11_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 12_2021 ####
+ref_periodo <- 202112
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_12_2021 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 01_2022 ####
+ref_periodo <- 202201
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_01_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 02_2022 ####
+ref_periodo <- 202202
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_02_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 03_2022 ####
+ref_periodo <- 202203
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_03_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 04_2022 ####
+ref_periodo <- 202204
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_04_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 05_2022 ####
+ref_periodo <- 202205
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_05_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 06_2022 ####
+ref_periodo <- 202206
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_06_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 07_2022 ####
+ref_periodo <- 202207
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_07_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 08_2022 ####
+ref_periodo <- 202208
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_08_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 09_2022 ####
+ref_periodo <- 202209
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_09_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 10_2022 ####
+ref_periodo <- 202210
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_10_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 11_2022 ####
+ref_periodo <- 202211
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_11_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+### 12_2022 ####
+ref_periodo <- 202212
+mensual <- rbind(
+  modelo.mensual(db1[db1$prov==0,]),
+  modelo.mensual(db1[db1$prov==1,])
+)
+mensual_12_2022 <- mensual %>% 
+  mutate(muertes_esperadas=d_hat, 
+         muertes_esperadas_var=se_d_hat^2,
+         exceso_muerte=muertes-muertes_esperadas,
+         exceso_muerte_var=muertes_esperadas_var,
+         muertes_esperadas_LCI= muertes_esperadas - qnorm(0.975)*sqrt(muertes_esperadas_var),
+         muertes_esperadas_UCI= muertes_esperadas + qnorm(0.975)*sqrt(muertes_esperadas_var),
+         exceso_muerte_LCI= exceso_muerte - qnorm(0.975)*sqrt(exceso_muerte_var),
+         exceso_muerte_UCI= exceso_muerte + qnorm(0.975)*sqrt(exceso_muerte_var)) %>% 
+  select(-d_hat, -se_d_hat)
+
+db_mensual <- mensual_01_2020 %>% 
+  bind_rows(mensual_02_2020, mensual_03_2020, mensual_04_2020, mensual_05_2020,mensual_06_2020, mensual_07_2020, mensual_08_2020, mensual_09_2020, mensual_10_2020, mensual_11_2020, mensual_12_2020,
+            mensual_01_2021, mensual_02_2021, mensual_03_2021, mensual_04_2021, mensual_05_2021,mensual_06_2021, mensual_07_2021, mensual_08_2021, mensual_09_2021, mensual_10_2021, mensual_11_2021, mensual_12_2021,
+            mensual_01_2022, mensual_02_2022, mensual_03_2022, mensual_04_2022, mensual_05_2022,mensual_06_2022, mensual_07_2022, mensual_08_2022, mensual_09_2022, mensual_10_2022, mensual_11_2022, mensual_12_2022) %>% 
+  mutate(muertes_esperadas=round(muertes_esperadas, digits = 0), exceso_muerte=round(exceso_muerte), muertes_esperadas_LCI=round(muertes_esperadas_LCI),muertes_esperadas_UCI=round(muertes_esperadas_UCI), exceso_muerte_LCI=round(exceso_muerte_LCI), exceso_muerte_UCI=round(exceso_muerte_UCI),
+       mes_anio=paste0("01","-",ifelse(as.numeric(mes)<10, paste0("0",mes),mes),"-",anio),
+                mes_anio=as.Date(mes_anio, format="%d-%m-%Y"))
+
+rm(mensual_01_2020, mensual_02_2020, mensual_03_2020, mensual_04_2020, mensual_05_2020,mensual_06_2020, mensual_07_2020, mensual_08_2020, mensual_09_2020, mensual_10_2020, mensual_11_2020, mensual_12_2020,
+   mensual_01_2021, mensual_02_2021, mensual_03_2021, mensual_04_2021, mensual_05_2021,mensual_06_2021, mensual_07_2021, mensual_08_2021, mensual_09_2021, mensual_10_2021, mensual_11_2021, mensual_12_2021,
+   mensual_01_2022, mensual_02_2022, mensual_03_2022, mensual_04_2022, mensual_05_2022,mensual_06_2022, mensual_07_2022, mensual_08_2022, mensual_09_2022, mensual_10_2022, mensual_11_2022, mensual_12_2022)
